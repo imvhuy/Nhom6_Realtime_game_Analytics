@@ -10,7 +10,8 @@ from kafka import KafkaProducer
 STEAM_API_KEY = "9D834392B85C588E56E887E7C28FED23"
 APP_ID = 730  # ví dụ CS:GO
 KAFKA_BROKER = ["localhost:19092", "localhost:19093"]
-CSV_PATH = r"d:\4th\StreamingBigdata\final\CK\code\steam_ids.csv"
+CSV_PATH = "steam_ids.csv"
+
 # ======================
 #  ĐỌC DANH SÁCH STEAM ID
 # ======================
@@ -84,7 +85,7 @@ async def main():
         print("\n=== BẮT ĐẦU LẤY DỮ LIỆU ===")
         async with aiohttp.ClientSession() as session:
             # Giới hạn số lượng request song song để tránh bị chặn (rate limit)
-            SEMAPHORE = asyncio.Semaphore(20)
+            SEMAPHORE = asyncio.Semaphore(2)  # Chỉnh số này tùy theo giới hạn của API
 
             async def limited_process(sid):
                 async with SEMAPHORE:
@@ -95,7 +96,7 @@ async def main():
 
         producer.flush()
         print("=== Hoàn thành một vòng, nghỉ 5 phút ===")
-        await asyncio.sleep(300)
+        await asyncio.sleep(5)
 
 if __name__ == "__main__":
     asyncio.run(main())

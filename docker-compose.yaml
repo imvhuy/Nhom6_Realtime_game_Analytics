@@ -32,7 +32,7 @@ services:
       KAFKA_CLUSTER_ID: my-cluster-id-1234
 
     volumes:
-      - ./kafka1_data:/var/lib/kafka/data
+      - kafka1_data:/var/lib/kafka/data
     networks:
       - shared-network
 
@@ -66,7 +66,7 @@ services:
       KAFKA_CLUSTER_ID: my-cluster-id-1234
 
     volumes:
-      - ./kafka2_data:/var/lib/kafka/data
+      - kafka2_data:/var/lib/kafka/data
     networks:
       - shared-network
     depends_on:
@@ -131,22 +131,15 @@ services:
     ports:
       - "27017:27017"
     volumes:
-      - ./mongo_data:/data/db
-    networks:
-      - shared-network
-
-  mongo-express:
-    image: mongo-express
-    container_name: mongo-express
-    ports:
-      - "8083:8081"
-    environment:
-      - ME_CONFIG_MONGODB_SERVER=mongodb
-    depends_on:
-      - mongodb
+      - mongo_data:/data/db
     networks:
       - shared-network
 
 networks:
   shared-network:
     driver: bridge
+
+volumes:
+  mongo_data:
+  kafka1_data:
+  kafka2_data:
