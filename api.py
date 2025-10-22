@@ -31,145 +31,139 @@ def ccu_latest():
     docs.reverse()  # để line chart đi từ cũ -> mới
     return jsonify(docs)
 
-## một số querry mẫu khi xài nhập URL là http://mongo-api:5000/players/list
-# Thêm vào sau endpoint /ccu/latest (sau dòng 32)
+# ==============================================
+# INSIGHTS & ANALYTICS ENDPOINTS
+# ==============================================
 
-# Lấy danh sách người chơi (có phân trang)
-# @app.route("/players/list")
-# def players_list():
-#     limit = int_q("limit", 50)
-#     skip = int_q("skip", 0)
+# 1.Phân tích trạng thái người chơi (persona state distribution)
+@app.route("/insights/player-states")
+def insights_player_states():
+    """
+    Thống kê phân bố trạng thái người chơi
+    0=Offline, 1=Online, 2=Busy, 3=Away, 4=Snooze, 5=Looking to trade, 6=Looking to play
+    """
+    pipeline = [
+        {"$group": {
+            "_id": "$personastate",
+            "count": {"$sum": 1},
+            "players": {"$push": "$personaname"}
+        }},
+        {"$sort": {"_id": 1}}
+    ]
     
-#     # Lọc theo trạng thái (optional)
-#     state = request.args.get("state")  # 0=offline, 1=online
-#     query = {}
-#     if state is not None:
-#         query["personastate"] = int(state)
+    result = list(db.player_details.aggregate(pipeline))
     
-#     docs = list(db.player_details.find(query, {"_id": 0})
-#                 .sort("last_seen", DESCENDING)
-#                 .skip(skip)
-#                 .limit(limit))
+    state_names = {
+        0: "Offline", 1: "Online", 2: "Busy", 3: "Away",
+        4: "Snooze", 5: "Looking to trade", 6: "Looking to play"
+    }
     
-#     total = db.player_details.count_documents(query)
+    formatted = [{
+        "state": state_names.get(doc["_id"], "Unknown"),
+        "state_code": doc["_id"],
+        "count": doc["count"],
+        "percentage": round(doc["count"] / sum(d["count"] for d in result) * 100, 2),
+        "sample_players": doc["players"][:5]  # Chỉ lấy 5 người mẫu
+    } for doc in result]
     
-#     return jsonify({
-#         "total": total,
-#         "limit": limit,
-#         "skip": skip,
-#         "data": docs
-#     })
-
-# # Lấy thông tin 1 người chơi cụ thể
-# @app.route("/players/<steamid>")
-# def player_detail(steamid):
-#     player = db.player_details.find_one({"steamid": steamid}, {"_id": 0})
-#     if not player:
-#         return jsonify({"error": "Player not found"}), 404
-#     return jsonify(player)
-
-# # Thống kê người chơi theo quốc gia
-# @app.route("/players/by-country")
-# def players_by_country():
-#     pipeline = [
-#         {"$group": {
-#             "_id": "$loccountrycode",
-#             "count": {"$sum": 1},
-#             "online": {
-#                 "$sum": {"$cond": [{"$eq": ["$personastate", 1]}, 1, 0]}
-#             },
-#             "offline": {
-#                 "$sum": {"$cond": [{"$eq": ["$personastate", 0]}, 1, 0]}
-#             }
-#         }},
-#         {"$sort": {"count": -1}},
-#         {"$limit": 20}
-#     ]
-    
-#     result = list(db.player_details.aggregate(pipeline))
-    
-#     # Format lại output
-#     formatted = [{
-#         "country": doc["_id"] or "Unknown",
-#         "total": doc["count"],
-#         "online": doc["online"],
-#         "offline": doc["offline"]
-#     } for doc in result]
-    
-#     return jsonify(formatted)
-
-# # Top người chơi online gần đây
-# @app.route("/players/online")
-# def players_online():
-#     limit = int_q("limit", 20)
-    
-#     docs = list(db.player_details.find(
-#         {"personastate": 1},  # chỉ lấy online
-#         {"_id": 0}
-#     ).sort("last_seen", DESCENDING).limit(limit))
-    
-#     return jsonify(docs)
-
-# # Search người chơi theo tên
-# @app.route("/players/search")
-# def players_search():
-#     name = request.args.get("name", "")
-#     limit = int_q("limit", 20)
-    
-#     if not name:
-#         return jsonify({"error": "Missing 'name' parameter"}), 400
-    
-#     # Case-insensitive search
-#     docs = list(db.player_details.find(
-#         {"personaname": {"$regex": name, "$options": "i"}},
-#         {"_id": 0}
-#     ).limit(limit))
-    
-#     return jsonify(docs)
+    return jsonify(formatted)
 
 
+# 2.Top quốc gia với nhiều người chơi nhất
+@app.route("/insights/top-countries")
+def insights_top_countries():
+    """
+    Top countries với breakdown online/offline và state code
+    """
+    k = int_q("k", 10)
+    
+    pipeline = [
+        {"$group": {
+            "_id": {
+                "country": "$loccountrycode",
+                "state_code": "$locstatecode"
+            },
+            "total": {"$sum": 1},
+            "online": {"$sum": {"$cond": [{"$eq": ["$personastate", 1]}, 1, 0]}},
+            "avg_lastlogoff": {"$avg": "$lastlogoff"}
+        }},
+        {"$group": {
+            "_id": "$_id.country",
+            "total_players": {"$sum": "$total"},
+            "total_online": {"$sum": "$online"},
+            "regions": {"$push": {
+                "state_code": "$_id.state_code",
+                "count": "$total"
+            }}
+        }},
+        {"$sort": {"total_players": -1}},
+        {"$limit": k}
+    ]
+    
+    result = list(db.player_details.aggregate(pipeline))
+    
+    formatted = [{
+        "country": doc["_id"] or "Unknown",
+        "total_players": doc["total_players"],
+        "online_players": doc["total_online"],
+        "offline_players": doc["total_players"] - doc["total_online"],
+        "online_rate": round(doc["total_online"] / doc["total_players"] * 100, 2) if doc["total_players"] > 0 else 0,
+        "top_regions": sorted(doc["regions"], key=lambda x: x["count"], reverse=True)[:3]
+    } for doc in result]
+    
+    return jsonify(formatted)
 
-# # Top quốc gia ở cửa sổ mới nhất
-# @app.route("/country/top")
-# def country_top():
-#     k = int_q("k", 10)
-#     latest_win = db.country_stats.find_one(sort=[("window_start", DESCENDING)])
-#     if not latest_win:
-#         return jsonify([])
-#     win_start = latest_win["window_start"]
-#     docs = list(db.country_stats.find(
-#         {"window_start": win_start}, {"_id": 0}
-#     ).sort("cnt", DESCENDING).limit(k))
-#     return jsonify(docs)
-
-# # Doanh thu theo giờ (nếu bạn có/sim item_events)
-# @app.route("/revenue/hourly")
-# def revenue_hourly():
-#     limit = int_q("limit", 24)
-#     docs = list(db.item_hourly_rev.find({}, {"_id": 0})
-#                 .sort("hour", DESCENDING)
-#                 .limit(limit))
-#     docs.reverse()
-#     return jsonify(docs)
-
-# # Top items gần đây
-# @app.route("/items/top")
-# def items_top():
-#     k = int_q("k", 10)
-#     pipeline = [
-#         {"$sort": {"hour": -1}},
-#         {"$limit": 6},  # gom vài giờ gần nhất
-#         {"$unwind": "$top_items"},
-#         {"$project": {
-#             "hour": 1,
-#             "item": {"$arrayElemAt": ["$top_items", 0]},
-#             "value": {"$arrayElemAt": ["$top_items", 1]}
-#         }},
-#         {"$sort": {"value": -1}},
-#         {"$limit": k}
-#     ]
-#     docs = list(db.item_hourly_rev.aggregate(pipeline))
-#     return jsonify(docs)
+# 3. Phân tích thời gian tạo tài khoản (account age)
+@app.route("/insights/account-age")
+def insights_account_age():
+    """
+    Phân tích độ tuổi tài khoản Steam
+    """
+    from datetime import datetime
+    
+    pipeline = [
+        {"$match": {"timecreated": {"$exists": True, "$ne": None}}},
+        {"$project": {
+            "steamid": 1,
+            "personaname": 1,
+            "timecreated": 1,
+            "age_years": {
+                "$divide": [
+                    {"$subtract": [datetime.now().timestamp(), "$timecreated"]},
+                    31536000  # seconds in a year
+                ]
+            }
+        }},
+        {"$bucket": {
+            "groupBy": "$age_years",
+            "boundaries": [0, 1, 3, 5, 10, 15, 20],
+            "default": "20+",
+            "output": {
+                "count": {"$sum": 1},
+                "avg_age": {"$avg": "$age_years"}
+            }
+        }}
+    ]
+    
+    result = list(db.player_details.aggregate(pipeline))
+    
+    age_labels = {
+        0: "< 1 year",
+        1: "1-3 years",
+        3: "3-5 years",
+        5: "5-10 years",
+        10: "10-15 years",
+        15: "15-20 years",
+        "20+": "20+ years"
+    }
+    
+    formatted = [{
+        "age_group": age_labels.get(doc["_id"], str(doc["_id"])),
+        "count": doc["count"],
+        "avg_age_years": round(doc["avg_age"], 1)
+    } for doc in result]
+    
+    return jsonify(formatted)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
