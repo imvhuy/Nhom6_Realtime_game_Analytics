@@ -10,7 +10,7 @@ from kafka import KafkaProducer
 STEAM_API_KEY = "9D834392B85C588E56E887E7C28FED23"
 APP_ID = 730  # ví dụ CS:GO
 KAFKA_BROKER = ["localhost:19092", "localhost:19093"]
-CSV_PATH = "steam_ids.csv"
+CSV_PATH = r"d:\4th\StreamingBigdata\final\CK\code\steam_ids.csv"
 
 # ======================
 #  ĐỌC DANH SÁCH STEAM ID

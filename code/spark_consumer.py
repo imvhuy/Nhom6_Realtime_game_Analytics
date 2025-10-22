@@ -9,11 +9,10 @@ Spark Structured Streaming với Stateful Processing
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     from_json, col, current_timestamp, window, count, sum as _sum,
-    avg, max as _max, min as _min, countDistinct, expr, 
+    avg, max as _max, min as _min, countDistinct, approx_count_distinct, expr, 
     when, lit, to_timestamp, unix_timestamp, struct
 )
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType, LongType
-from pyspark.sql.streaming import GroupState, GroupStateTimeout
 import os
 
 # ======================
@@ -30,11 +29,12 @@ CHECKPOINT_DIR = "/tmp/spark_checkpoint_ccu"
 # ======================
 spark = SparkSession.builder \
     .appName("SteamCCU_Stateful_Streaming") \
-    .config("spark.mongodb.output.uri", f"{MONGO_URI}/{MONGO_DB}") \
     .config("spark.jars.packages", 
-            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.5,"
-            "org.mongodb.spark:mongo-spark-connector_2.12:10.2.0") \
+            "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.5") \
     .config("spark.sql.streaming.stateStore.stateSchemaCheck", "false") \
+    .config("spark.jars.ivy", "/opt/bitnami/spark/.ivy2") \
+    .config("spark.driver.extraJavaOptions", "-Duser.home=/opt/bitnami/spark -Divy.home=/opt/bitnami/spark/.ivy2") \
+    .config("spark.executor.extraJavaOptions", "-Duser.home=/opt/bitnami/spark -Divy.home=/opt/bitnami/spark/.ivy2") \
     .getOrCreate()
 
 spark.sparkContext.setLogLevel("WARN")
@@ -113,7 +113,7 @@ df_windowed_ccu = df_players \
         col("country")
     ) \
     .agg(
-        countDistinct("steamid").alias("unique_players"),
+        approx_count_distinct("steamid").alias("unique_players"),
         _sum(when(col("personastate") == 1, 1).otherwise(0)).alias("online_count"),
         _sum(when(col("personastate") == 0, 1).otherwise(0)).alias("offline_count"),
         _sum(when(col("personastate") >= 2, 1).otherwise(0)).alias("away_count"),
@@ -132,13 +132,12 @@ df_windowed_ccu = df_players \
         col("computation_time")
     )
 
-# Write windowed CCU to MongoDB
+# Write windowed CCU to console for debugging
 query_windowed = df_windowed_ccu.writeStream \
     .outputMode("append") \
-    .format("mongodb") \
+    .format("console") \
     .option("checkpointLocation", f"{CHECKPOINT_DIR}/windowed_ccu") \
-    .option("database", MONGO_DB) \
-    .option("collection", "ccu_windowed") \
+    .option("truncate", "false") \
     .trigger(processingTime="30 seconds") \
     .start()
 
@@ -159,11 +158,11 @@ df_global_ccu = df_players \
         window(col("event_time"), "5 minutes", "5 minutes")
     ) \
     .agg(
-        countDistinct("steamid").alias("total_unique_players"),
+        approx_count_distinct("steamid").alias("total_unique_players"),
         _sum(when(col("personastate") == 1, 1).otherwise(0)).alias("total_online"),
         _sum(when(col("personastate") == 0, 1).otherwise(0)).alias("total_offline"),
         _sum(when(col("personastate") >= 2, 1).otherwise(0)).alias("total_away"),
-        countDistinct("country").alias("active_countries"),
+        approx_count_distinct("country").alias("active_countries"),
         current_timestamp().alias("computation_time")
     ) \
     .select(
@@ -180,10 +179,9 @@ df_global_ccu = df_players \
 
 query_global = df_global_ccu.writeStream \
     .outputMode("append") \
-    .format("mongodb") \
+    .format("console") \
     .option("checkpointLocation", f"{CHECKPOINT_DIR}/global_ccu") \
-    .option("database", MONGO_DB) \
-    .option("collection", "ccu_global") \
+    .option("truncate", "false") \
     .trigger(processingTime="30 seconds") \
     .start()
 
@@ -222,10 +220,9 @@ df_player_state = df_players \
 
 query_player_state = df_player_state.writeStream \
     .outputMode("append") \
-    .format("mongodb") \
+    .format("console") \
     .option("checkpointLocation", f"{CHECKPOINT_DIR}/player_state") \
-    .option("database", MONGO_DB) \
-    .option("collection", "player_state_history") \
+    .option("truncate", "false") \
     .trigger(processingTime="30 seconds") \
     .start()
 
@@ -245,7 +242,7 @@ df_sliding = df_players \
         window(col("event_time"), "10 minutes", "2 minutes")  # 10min window, slide 2min
     ) \
     .agg(
-        countDistinct("steamid").alias("unique_players"),
+        approx_count_distinct("steamid").alias("unique_players"),
         _sum(when(col("personastate") == 1, 1).otherwise(0)).alias("online"),
         _max(when(col("personastate") == 1, 1).otherwise(0)).alias("peak_online"),
         current_timestamp().alias("computation_time")
@@ -261,10 +258,9 @@ df_sliding = df_players \
 
 query_sliding = df_sliding.writeStream \
     .outputMode("append") \
-    .format("mongodb") \
+    .format("console") \
     .option("checkpointLocation", f"{CHECKPOINT_DIR}/sliding_window") \
-    .option("database", MONGO_DB) \
-    .option("collection", "ccu_trends") \
+    .option("truncate", "false") \
     .trigger(processingTime="1 minute") \
     .start()
 
