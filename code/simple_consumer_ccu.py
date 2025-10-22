@@ -26,9 +26,9 @@ consumer = KafkaConsumer(
     KAFKA_TOPIC,
     bootstrap_servers=KAFKA_BROKER,
     value_deserializer=lambda m: json.loads(m.decode('utf-8')),
-    auto_offset_reset='latest',  # Chỉ áp dụng khi group_id chưa có offset
+    auto_offset_reset='earliest',  # Đọc từ đầu nếu chưa có offset
     enable_auto_commit=True,
-    group_id='ccu-calculator-group-v3'  # Đổi tên mới để bắt đầu từ latest
+    group_id='ccu-calculator-group-v2'  # Đổi group_id để reset offset
 )
 
 mongo_client = MongoClient(MONGO_URI)
@@ -79,41 +79,18 @@ def calculate_ccu():
 
 def save_ccu_to_mongo():
     """
-    Cập nhật dữ liệu CCU vào MongoDB (update thay vì insert mới)
+    Lưu dữ liệu CCU vào MongoDB
     """
     ccu_data = calculate_ccu()
-    now = datetime.now()
+    result = collection.insert_one(ccu_data)
     
-    # Tạo key duy nhất để update (theo ngày và giờ, làm tròn đến phút)
-    time_key = now.strftime('%Y-%m-%d %H:%M')
-    
-    # Update hoặc insert nếu chưa tồn tại
-    result = collection.update_one(
-        {"time_key": time_key},  # Filter: tìm document theo time_key
-        {"$set": {
-            "time_key": time_key,
-            "timestamp": now,
-            "total_players": ccu_data['total_players'],
-            "online_players": ccu_data['online_players'],
-            "offline_players": ccu_data['offline_players'],
-            "away_players": ccu_data['away_players'],
-            "country_stats": ccu_data['country_stats'],
-            "country_online": ccu_data['country_online'],
-            "top_countries": ccu_data['top_countries'],
-            "last_updated": now
-        }},
-        upsert=True  # Tạo mới nếu chưa tồn tại
-    )
-    
-    action = "Tạo mới" if result.upserted_id else "Cập nhật"
-    print(f"\n[{now.strftime('%Y-%m-%d %H:%M:%S')}] CCU Statistics ({action}):")
-    print(f"  Time Key: {time_key}")
+    print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] CCU Statistics:")
     print(f"  Tổng: {ccu_data['total_players']} người")
     print(f"  Online (state=1): {ccu_data['online_players']} người")
     print(f"  Offline (state=0): {ccu_data['offline_players']} người")
     print(f"  Away/Busy (state=2+): {ccu_data['away_players']} người")
     print(f"  Top quốc gia: {ccu_data['top_countries'][:3]}")
-    print(f"  {'Upserted ID: ' + str(result.upserted_id) if result.upserted_id else 'Matched: ' + str(result.matched_count) + ' | Modified: ' + str(result.modified_count)}")
+    print(f"  Đã lưu vào MongoDB (ID: {result.inserted_id})")
     print("=" * 60)
 
 # ======================
@@ -152,13 +129,6 @@ try:
             state_text = {0: "Offline", 1: "Online", 2: "Busy", 3: "Away", 4: "Snooze", 5: "Looking to trade", 6: "Looking to play"}.get(state, "Unknown")
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Cập nhật: {player_data.get('personaname', 'Unknown')} "
                   f"({steamid}) - {state_text} (state={state})")
-            
-            ccu_data = calculate_ccu()
-            print(f"  Tổng: {ccu_data['total_players']} người")
-            print(f"  Online (state=1): {ccu_data['online_players']} người")
-            print(f"  Offline (state=0): {ccu_data['offline_players']} người")
-            print(f"  Away/Busy (state=2+): {ccu_data['away_players']} người")
-            print(f"  Top quốc gia: {ccu_data['top_countries'][:3]}")
         
         # Kiểm tra xem đã đến lúc lưu CCU chưa
         current_time = time.time()
