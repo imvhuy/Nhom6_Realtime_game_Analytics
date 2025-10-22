@@ -1,0 +1,24 @@
+# Python dependencies for Steam Analytics Producer
+
+# Kafka
+kafka-python==2.0.2
+
+# Async HTTP
+aiohttp==3.9.0
+asyncio-mqtt==0.16.1
+
+# Data processing
+pandas==2.1.4
+numpy==1.24.4
+
+# CSV handling (built-in, listed for reference)
+# csv - standard library
+
+# JSON handling (built-in, listed for reference)  
+# json - standard library
+
+# Steam API
+requests==2.31.0
+
+# Utilities
+python-dateutil==2.8.2

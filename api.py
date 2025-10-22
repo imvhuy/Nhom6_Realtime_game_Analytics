@@ -165,5 +165,260 @@ def insights_account_age():
     
     return jsonify(formatted)
 
+# ==============================================
+# GAME STATS ENDPOINTS (K/D, Items)
+# ==============================================
+
+# 4. Top người chơi theo K/D ratio
+@app.route("/stats/top-kd")
+def stats_top_kd():
+    """
+    Top người chơi với tỉ lệ K/D cao nhất
+    """
+    limit = int_q("limit", 20)
+    
+    pipeline = [
+        {"$match": {
+            "total_kills": {"$exists": True, "$gt": 0},
+            "total_deaths": {"$exists": True, "$gt": 0}
+        }},
+        {"$project": {
+            "steamid": 1,
+            "personaname": 1,
+            "total_kills": 1,
+            "total_deaths": 1,
+            "kd_ratio": {
+                "$cond": [
+                    {"$gt": ["$total_deaths", 0]},
+                    {"$divide": ["$total_kills", "$total_deaths"]},
+                    "$total_kills"
+                ]
+            },
+            "total_rounds_played": 1,
+            "total_mvps": 1,
+            "last_updated": 1
+        }},
+        {"$sort": {"kd_ratio": -1}},
+        {"$limit": limit}
+    ]
+    
+    result = list(db.player_game_stats.aggregate(pipeline))
+    
+    formatted = [{
+        "rank": idx + 1,
+        "steamid": doc.get("steamid"),
+        "player_name": doc.get("personaname", "Unknown"),
+        "kills": doc.get("total_kills", 0),
+        "deaths": doc.get("total_deaths", 0),
+        "kd_ratio": round(doc.get("kd_ratio", 0), 2),
+        "rounds_played": doc.get("total_rounds_played", 0),
+        "mvps": doc.get("total_mvps", 0),
+        "last_updated": doc.get("last_updated")
+    } for idx, doc in enumerate(result)]
+    
+    return jsonify(formatted)
+
+# 5. Thống kê K/D theo khoảng
+@app.route("/stats/kd-distribution")
+def stats_kd_distribution():
+    """
+    Phân bố người chơi theo khoảng K/D ratio
+    """
+    pipeline = [
+        {"$match": {
+            "total_kills": {"$exists": True},
+            "total_deaths": {"$exists": True, "$gt": 0}
+        }},
+        {"$project": {
+            "kd_ratio": {
+                "$cond": [
+                    {"$gt": ["$total_deaths", 0]},
+                    {"$divide": ["$total_kills", "$total_deaths"]},
+                    "$total_kills"
+                ]
+            }
+        }},
+        {"$bucket": {
+            "groupBy": "$kd_ratio",
+            "boundaries": [0, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0],
+            "default": "5.0+",
+            "output": {
+                "count": {"$sum": 1},
+                "avg_kd": {"$avg": "$kd_ratio"}
+            }
+        }}
+    ]
+    
+    result = list(db.player_game_stats.aggregate(pipeline))
+    
+    kd_labels = {
+        0: "0.0 - 0.5 (Beginner)",
+        0.5: "0.5 - 1.0 (Below Average)",
+        1.0: "1.0 - 1.5 (Average)",
+        1.5: "1.5 - 2.0 (Good)",
+        2.0: "2.0 - 3.0 (Very Good)",
+        3.0: "3.0 - 5.0 (Excellent)",
+        "5.0+": "5.0+ (Pro)"
+    }
+    
+    formatted = [{
+        "kd_range": kd_labels.get(doc["_id"], str(doc["_id"])),
+        "player_count": doc["count"],
+        "avg_kd": round(doc["avg_kd"], 2)
+    } for doc in result]
+    
+    return jsonify(formatted)
+
+# 6. Top vật phẩm phổ biến nhất (weapons)
+@app.route("/stats/top-weapons")
+def stats_top_weapons():
+    """
+    Top vũ khí được sử dụng nhiều nhất (dựa trên kills)
+    """
+    limit = int_q("limit", 15)
+    
+    pipeline = [
+        {"$match": {"weapon_stats": {"$exists": True}}},
+        {"$unwind": "$weapon_stats"},
+        {"$group": {
+            "_id": "$weapon_stats.weapon_name",
+            "total_kills": {"$sum": "$weapon_stats.kills"},
+            "total_shots": {"$sum": "$weapon_stats.shots"},
+            "total_hits": {"$sum": "$weapon_stats.hits"},
+            "users_count": {"$sum": 1}
+        }},
+        {"$project": {
+            "weapon_name": "$_id",
+            "total_kills": 1,
+            "total_shots": 1,
+            "total_hits": 1,
+            "users_count": 1,
+            "accuracy": {
+                "$cond": [
+                    {"$gt": ["$total_shots", 0]},
+                    {"$multiply": [
+                        {"$divide": ["$total_hits", "$total_shots"]},
+                        100
+                    ]},
+                    0
+                ]
+            },
+            "avg_kills_per_user": {
+                "$divide": ["$total_kills", "$users_count"]
+            }
+        }},
+        {"$sort": {"total_kills": -1}},
+        {"$limit": limit}
+    ]
+    
+    result = list(db.player_game_stats.aggregate(pipeline))
+    
+    formatted = [{
+        "rank": idx + 1,
+        "weapon": doc.get("weapon_name", "Unknown"),
+        "total_kills": doc.get("total_kills", 0),
+        "total_shots": doc.get("total_shots", 0),
+        "total_hits": doc.get("total_hits", 0),
+        "accuracy": round(doc.get("accuracy", 0), 2),
+        "users": doc.get("users_count", 0),
+        "avg_kills_per_user": round(doc.get("avg_kills_per_user", 0), 1)
+    } for idx, doc in enumerate(result)]
+    
+    return jsonify(formatted)
+
+# 7. Top map phổ biến
+@app.route("/stats/top-maps")
+def stats_top_maps():
+    """
+    Top bản đồ được chơi nhiều nhất
+    """
+    limit = int_q("limit", 10)
+    
+    pipeline = [
+        {"$match": {"map_stats": {"$exists": True}}},
+        {"$unwind": "$map_stats"},
+        {"$group": {
+            "_id": "$map_stats.map_name",
+            "total_rounds": {"$sum": "$map_stats.rounds_played"},
+            "total_wins": {"$sum": "$map_stats.rounds_won"},
+            "players_count": {"$sum": 1}
+        }},
+        {"$project": {
+            "map_name": "$_id",
+            "total_rounds": 1,
+            "total_wins": 1,
+            "players_count": 1,
+            "win_rate": {
+                "$cond": [
+                    {"$gt": ["$total_rounds", 0]},
+                    {"$multiply": [
+                        {"$divide": ["$total_wins", "$total_rounds"]},
+                        100
+                    ]},
+                    0
+                ]
+            },
+            "avg_rounds_per_player": {
+                "$divide": ["$total_rounds", "$players_count"]
+            }
+        }},
+        {"$sort": {"total_rounds": -1}},
+        {"$limit": limit}
+    ]
+    
+    result = list(db.player_game_stats.aggregate(pipeline))
+    
+    formatted = [{
+        "rank": idx + 1,
+        "map": doc.get("map_name", "Unknown"),
+        "total_rounds": doc.get("total_rounds", 0),
+        "total_wins": doc.get("total_wins", 0),
+        "win_rate": round(doc.get("win_rate", 0), 2),
+        "players": doc.get("players_count", 0),
+        "avg_rounds_per_player": round(doc.get("avg_rounds_per_player", 0), 1)
+    } for idx, doc in enumerate(result)]
+    
+    return jsonify(formatted)
+
+# 8. Player profile với full stats
+@app.route("/stats/player/<steamid>")
+def stats_player_profile(steamid):
+    """
+    Thông tin chi tiết về một người chơi cụ thể
+    """
+    player = db.player_game_stats.find_one({"steamid": steamid}, {"_id": 0})
+    
+    if not player:
+        return jsonify({"error": "Player not found"}), 404
+    
+    # Tính toán thêm các metrics
+    kills = player.get("total_kills", 0)
+    deaths = player.get("total_deaths", 1)
+    kd_ratio = round(kills / deaths if deaths > 0 else kills, 2)
+    
+    headshot_kills = player.get("total_kills_headshot", 0)
+    headshot_rate = round(headshot_kills / kills * 100 if kills > 0 else 0, 2)
+    
+    profile = {
+        "steamid": steamid,
+        "player_name": player.get("personaname", "Unknown"),
+        "overall_stats": {
+            "kills": kills,
+            "deaths": deaths,
+            "kd_ratio": kd_ratio,
+            "headshot_kills": headshot_kills,
+            "headshot_rate": headshot_rate,
+            "rounds_played": player.get("total_rounds_played", 0),
+            "mvps": player.get("total_mvps", 0),
+            "wins": player.get("total_wins", 0),
+            "damage": player.get("total_damage_done", 0)
+        },
+        "weapon_stats": player.get("weapon_stats", []),
+        "map_stats": player.get("map_stats", []),
+        "last_updated": player.get("last_updated")
+    }
+    
+    return jsonify(profile)
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
